@@ -5,6 +5,7 @@
 #include "tupperware_types.h"
 
 #define WF fprintf
+#define FIELD_GLOB "field_name"
 #define SHARED_VAL "shared_val"
 
 static void _show_type ( struct type_desc *type, FILE *file )
@@ -35,10 +36,6 @@ static void _show_field ( struct field *field, FILE *file )
   WF ( file, " %s", field->field_name);
   WF ( file, ";\n");
 }
-
-/************************/
-/** EXPORTED PROTOYPES **/
-/************************/
 
 /**************************************/
 /** For header type file declaration **/
@@ -180,16 +177,16 @@ static void _do_lex_header ( FILE *file, struct type_desc *list_of_types, char *
 "int yywrap(void);\n"
 "\n"
 "static int line_counter = 1;\n"
+"static int level_counter = 0;\n"
 "\n",
     (strrchr( header_filename, '/' )) + 1 );
 
   WF ( file, "union lex_opt {\n" );
 
+  WF ( file, "  char * str;\n" );
   for ( etype = list_of_types->next; etype != NULL; etype = etype->next ) {
     if ( etype->type_ind == E_ENUM ) {
       WF ( file, "  enum %s e_%s;\n", etype->type_name, etype->type_name );
-    } else if ( etype->type_ind == E_BASIC_TYPE ) {
-      WF ( file, "  %s * p_%s;\n", etype->type_name, etype->variable_name );
     }
     name_to_zeroise = etype->type_name;
   }
@@ -216,11 +213,13 @@ static void _do_lex_header ( FILE *file, struct type_desc *list_of_types, char *
 
   /* Declare and zeroise the shared value */
   if ( name_to_zeroise != NULL )
-    WF ( file, "\nunion lex_opt %s = { .%s = NULL };\n", name_to_zeroise, SHARED_VAL );
+    WF ( file, "\nunion lex_opt %s = { .%s = NULL };\n", SHARED_VAL, name_to_zeroise );
+
+  WF ( file, "enum lex_return %s = -1;\n\n", FIELD_GLOB );
 
   WF ( file, 
 "\n"
-"}%%\n" );
+"%%}\n" );
 }
 
 static void _do_lex_state_defs ( FILE * file, struct type_desc *list_of_types, char *lexoutfilename, char *lexoutheaderfilename )
@@ -230,7 +229,7 @@ static void _do_lex_state_defs ( FILE * file, struct type_desc *list_of_types, c
 
   if ( list_of_types == NULL || list_of_types->next == NULL ) return;
 
-  WF ( file, "\n" "%%x SYNTAX_FILE_ERROR " );
+  WF ( file, "\n" "%%x SYNTAX_FILE_ERROR CLOSE_LINE " );
   /* dont care of ROOT ! */
   for ( etype = list_of_types->next; etype != NULL; etype = etype->next ) {
     WF ( file, "%s ", etype->TYPE_NAME );
@@ -257,7 +256,7 @@ static void _do_lex_options ( FILE *file, char *lexoutfilename, char *lexouthead
   if ( file == NULL || lexoutfilename == NULL || lexoutheaderfilename == NULL )
     return;
 
-  WF ( file, "%%options outfile=\"%s\" header-file=\"%s\"\n\n", lexoutfilename, lexoutheaderfilename );
+  WF ( file, "%%option outfile=\"%s\" header-file=\"%s\"\n\n", lexoutfilename, lexoutheaderfilename );
 }
 
 static void _do_lex_easy_symbol ( FILE *file )
@@ -268,31 +267,99 @@ static void _do_lex_easy_symbol ( FILE *file )
   WF ( file, "\n" );
 }
 
-void _do_lex_machine_state ( FILE *file, struct type_desc *types )
+static void _do_lex_extra_rules ( FILE *file )
 {
-  struct type_desc *etype;
-  struct field *field;
+  if ( file != NULL )
+    WF ( file,
+"<CLOSE_LINE>[^[:space:]]\t{ BEGIN SYNTAX_FILE_ERROR; }\n"
+"<CLOSE_LINE>[^\\n]\t;/* nothing to do */\n"
+"<CLOSE_LINE>\\n\t{ line_counter++; }\n"
+".\t\t{ BEGIN SYNTAX_FILE_ERROR; yymore(); }\n"
+"<SYNTAX_FILE_ERROR>\\n\t{ error(\"OhoNo! Unexpected token at line %%d: %%s\", line_counter, yytext); }\n"
+"<SYNTAX_FILE_ERROR>[^\\n]\t{ yymore(); }\n"
+    );
+}
 
-  if ( file == NULL || types == NULL ) return;
-
+static void _do_lex_begin_rules ( FILE *file )
+{
+  if ( file == NULL ) return;
   WF ( file,
 "%%%%\n"
 "\\n\t\t{ line_counter++; }\n"
-"\\t\t\t;\n"
+"^\\t\t\t;\n"
   );
 
+}
+
+static void _do_lex_machine_state ( FILE *file, struct type_desc *types )
+{
+  struct type_desc *etype;
+  struct field *field;
+  struct vals *val;
+
+  if ( file == NULL || types == NULL ) return;
+
+  _do_lex_begin_rules ( file );
+
+  /* Let's have a special case with the root structure, since we should be out
+   * of any level...
+   */
+  etype = types;
+  /* Ensure that root is a struct... just to be sure but by construction
+   * it can only be a structure...
+   */
+  if ( etype->type_ind == E_STRUCT ) {
+    for ( field = etype->u_desc.struct_desc.list_of_fields;
+          field != NULL;
+          field = field->next ) {
+      WF ( file, "[%s]{S}*={S}*{NN}\t\t{ BEGIN %s; %s.str = strdup(yytext); return E_%s; }\n", field->field_name, field->type->TYPE_NAME, SHARED_VAL, field->FIELD_NAME );
+    }
+  }
+
   for ( etype = types->next; etype != NULL; etype = etype->next ) {
+    WF ( file, "\t/* Parsing %s %s vals */\n", (etype->type_ind == E_STRUCT) ? "struct" : (etype->type_ind == E_ENUM ) ? "enum" : "basic type", etype->type_name );
     if ( etype->type_ind == E_STRUCT ) {
       for ( field = etype->u_desc.struct_desc.list_of_fields;
             field != NULL;
             field = field->next ) {
-        WF ( file, "<%s>%s{S}*={S}*{NN}\t\t{ BEGIN %s; return E_%s; }\n", etype->TYPE_NAME, field->field_name, field->type->TYPE_NAME, field->FIELD_NAME );
+        if ( field->type->type_ind == E_STRUCT ) {
+          /* If field is a substruct, we have to indicate to machine state
+           * handler that a new function able to parse that struct shall be
+           * called
+           */
+          WF ( file, "<%s>[%s]{S}*={S}*{NN}\t\t{ BEGIN %s; return E_%s; }\n", etype->TYPE_NAME, field->field_name, field->type->TYPE_NAME, field->FIELD_NAME );
+        } else if ( field->type->type_ind == E_BASIC_TYPE && field->type->u_desc.type_desc == STRING_t ) {
+          /* If field is of type "string_t", we have to remove the '"' sign
+           * from the start and the end of the string
+           */
+          WF ( file, "<%s>%s{S}*={S}*\"\t\t{ BEGIN %s; %s = E_%s; }\n", etype->TYPE_NAME, field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
+        } else {
+          /* If field is of type "simple", meaning int, float..., well we
+           * shall parse directly what happens next to the '=' sign
+           */
+          WF ( file, "<%s>%s{S}*={S}*{NN}\t\t{ BEGIN %s; %s = E_%s; }\n", etype->TYPE_NAME, field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
+        }
+        WF ( file, "\"[/%s]\"\t\t{ BEGIN 0; return END_STRUCT; }\n", etype->
       }
+    } else if ( etype->type_ind == E_BASIC_TYPE && etype->u_desc.type_desc != STRING_t ) {
+      WF ( file, "<%s>[^[:space:]\\n]+\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return %s; }\n", etype->TYPE_NAME, SHARED_VAL, FIELD_GLOB);
+    } else if ( etype->type_ind == E_BASIC_TYPE ) { /* it remains string_t */
+      WF ( file, "<%s>.*[^\\]\"\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return E_%s; }\n", etype->TYPE_NAME, SHARED_VAL, etype->TYPE_NAME );
+    } else if ( etype->type_ind == E_ENUM ) {
+      for ( val = etype->u_desc.enum_desc.values; val != NULL; val = val->next ) {
+        WF ( file, "<%s>\"%s\"\t\t{ BEGIN CLOSE_LINE; %s.e_%s = %s; return %s; }\n", etype->TYPE_NAME, val->name, SHARED_VAL, etype->type_name, val->enum_name, FIELD_GLOB );
+      }
+      WF ( file, "<%s>.\t\t{ BEGIN SYNTAX_FILE_ERROR; }\n", etype->TYPE_NAME );
     }
   }
 
+  _do_lex_extra_rules ( file );
   WF ( file, "%%%%\n");
 }
+
+/************************/
+/** EXPORTED PROTOYPES **/
+/************************/
 
 int make_header ( FILE *header, char *cc, struct type_desc *list_of_types, char *config_functionname )
 {
