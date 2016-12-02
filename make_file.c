@@ -119,33 +119,39 @@ void print_bottom ( const char *cfl, FILE *file )
 /******************************/
 /** For lex file declaration **/
 /******************************/
-static int _append_or_not ( const char *fieldname, const char ***plist_of_fields, unsigned int size_of_list )
+static int _append_or_not ( struct field *field, struct field ***plist_of_fields, unsigned int *size_of_list )
 {
-  const char **pnew;
+  struct field **pnew;
   unsigned int fieldindex = 0;
 
-  if ( plist_of_fields == NULL || fieldname == NULL ) return -1;
+  if ( plist_of_fields == NULL || field == NULL || size_of_list == NULL )
+    return -1;
 
   if ( *plist_of_fields == NULL ) {
-    *plist_of_fields = (const char **) calloc (1, sizeof(char*));
+    *plist_of_fields = (struct field **) calloc (1, sizeof(struct field*));
     if ( *plist_of_fields == NULL ) {
       printf ("running out of memory\n");
       return -2;
     }
-    printf ("appending %s at %p\n", fieldname, *plist_of_fields);
-    *plist_of_fields[0] = fieldname;
+    printf ("appending %s at %p\n", field->field_name, *plist_of_fields);
+    *plist_of_fields[0] = field;
     return 0;
   }
 
-  for ( fieldindex = 0; fieldindex < size_of_list; fieldindex++ ) {
-    if ( strcmp ( fieldname, (*plist_of_fields)[fieldindex]) == 0 ) {
-      printf ("Have found already defined fieldname: %s\n", fieldname);
-      return 1;
+  for ( fieldindex = 0; fieldindex < *size_of_list; fieldindex++ ) {
+    if ( strcmp ( field->field_name, (*plist_of_fields)[fieldindex]->field_name) == 0 ) {
+      if ( field->type->type_ind == (*plist_of_fields)[fieldindex]->type->type_ind ) {
+        printf ("Have found already defined fieldname: %s\n", field->field_name);
+        return 0;
+      } else {
+        printf ("Field from: %s\n", (*plist_of_fields)[fieldindex]->type->type_name);
+        return 1;
+      }
     }
   }
 
-  printf ("appending fieldname: %s at %p + %u\n", fieldname, *plist_of_fields, size_of_list );
-  pnew = (const char **) realloc ( *plist_of_fields, ( ++size_of_list ) * sizeof(char*));
+  *size_of_list += 1;
+  pnew = (struct field **) realloc ( *plist_of_fields, *size_of_list * sizeof(struct field*));
   if ( pnew == NULL ) {
     printf ("Out of mem\n");
     free ( plist_of_fields );
@@ -153,19 +159,44 @@ static int _append_or_not ( const char *fieldname, const char ***plist_of_fields
   }
   printf ("New allocated space at: %p\n", *plist_of_fields);
   *plist_of_fields = pnew;
-  (*plist_of_fields)[size_of_list-1] = fieldname;
-  printf ("First elem is: %s\n", (*plist_of_fields)[0]);
+  (*plist_of_fields)[*size_of_list-1] = field;
+  printf ("First elem is: %s\n", (*plist_of_fields)[0]->FIELD_NAME);
 
   return 0;
 }
 
-static void _do_lex_header ( FILE *file, struct type_desc *list_of_types, char *header_filename )
+static int _make_uniq_field_list ( struct type_desc *list_of_types,
+                                   struct field ***list_of_uniq_fields,
+                                   unsigned int *pnb_uniq_fields )
+{
+  struct type_desc *etype;
+  struct field *efield;
+
+  if ( list_of_types == NULL || list_of_uniq_fields == NULL || pnb_uniq_fields == NULL )
+    return 1;
+
+  for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
+    if ( etype->type_ind == E_STRUCT ) {
+      for ( efield = etype->u_desc.struct_desc.list_of_fields;
+            efield != NULL;
+            efield = efield->next ) {
+        if ( _append_or_not ( efield, list_of_uniq_fields, pnb_uniq_fields ) > 0 ) {
+          error ("ERR: You've specified at least twice the same field name (%s), but they have been declared with two different types\n    which is not fine to parse!\n     Please use another name for one of these fields\n");
+          return 1;
+        }
+      }
+    }
+  }
+
+  return 0;
+}
+
+static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, unsigned int nb_uniq_fields, struct type_desc *list_of_types, char *header_filename )
 {
   struct type_desc *etype;
   struct field *efield;
   char *name_to_zeroise = NULL;
-  unsigned int nb_uniq_fieldname = 0;
-  const char **list_of_uniq_fieldname = NULL;
+  unsigned int u_field;
 
   if ( file == NULL || header_filename == NULL || list_of_types == NULL ) return;
 
@@ -187,6 +218,8 @@ static void _do_lex_header ( FILE *file, struct type_desc *list_of_types, char *
   for ( etype = list_of_types->next; etype != NULL; etype = etype->next ) {
     if ( etype->type_ind == E_ENUM ) {
       WF ( file, "  enum %s e_%s;\n", etype->type_name, etype->type_name );
+    } else if ( etype->type_ind == E_BASIC_TYPE ) {
+      WF ( file, "  %s e_%s;\n", etype->type_name, etype->TYPE_NAME );
     }
     name_to_zeroise = etype->type_name;
   }
@@ -197,17 +230,8 @@ static void _do_lex_header ( FILE *file, struct type_desc *list_of_types, char *
    * same enum
    */
   WF ( file, "enum lex_return {\n" );
-  for ( etype = list_of_types->next; etype != NULL; etype = etype->next ) {
-    if ( etype->type_ind == E_STRUCT ) {
-      for ( efield = etype->u_desc.struct_desc.list_of_fields;
-            efield != NULL;
-            efield = efield->next ) {
-        if ( _append_or_not ( efield->field_name, &list_of_uniq_fieldname, nb_uniq_fieldname ) == 0 ) {
-          WF ( file, "  E_%s = %u,\n", efield->FIELD_NAME, nb_uniq_fieldname );
-          nb_uniq_fieldname++;
-        }
-      }
-    }
+  for ( u_field = 0; u_field < nb_uniq_fields; u_field++ ) {
+    WF ( file, "  E_%s,\n", list_of_uniq_fields[u_field]->FIELD_NAME );
   }
   WF ( file, "};\n" );
 
@@ -232,7 +256,8 @@ static void _do_lex_state_defs ( FILE * file, struct type_desc *list_of_types, c
   WF ( file, "\n" "%%x SYNTAX_FILE_ERROR CLOSE_LINE " );
   /* dont care of ROOT ! */
   for ( etype = list_of_types->next; etype != NULL; etype = etype->next ) {
-    WF ( file, "%s ", etype->TYPE_NAME );
+    if ( etype->type_ind != E_STRUCT )
+      WF ( file, "%s ", etype->TYPE_NAME );
 #if 0
     if ( etype->type_ind == E_STRUCT ) {
       WF ( file, "%s ", etype->TYPE_NAME );
@@ -291,57 +316,44 @@ static void _do_lex_begin_rules ( FILE *file )
 
 }
 
-static void _do_lex_machine_state ( FILE *file, struct type_desc *types )
+static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types, struct field **list_of_uniq_fields, unsigned int nb_fields )
 {
   struct type_desc *etype;
   struct field *field;
   struct vals *val;
+  unsigned int u_field;
 
-  if ( file == NULL || types == NULL ) return;
+  if ( file == NULL || list_of_types == NULL ) return;
 
   _do_lex_begin_rules ( file );
 
   /* Let's have a special case with the root structure, since we should be out
    * of any level...
    */
-  etype = types;
-  /* Ensure that root is a struct... just to be sure but by construction
-   * it can only be a structure...
-   */
-  if ( etype->type_ind == E_STRUCT ) {
-    for ( field = etype->u_desc.struct_desc.list_of_fields;
-          field != NULL;
-          field = field->next ) {
-      WF ( file, "[%s]{S}*={S}*{NN}\t\t{ BEGIN %s; %s.str = strdup(yytext); return E_%s; }\n", field->field_name, field->type->TYPE_NAME, SHARED_VAL, field->FIELD_NAME );
+  for ( u_field = 0; u_field < nb_fields; u_field++ ) {
+    field = list_of_uniq_fields[u_field];
+    if ( field->type->type_ind == E_STRUCT ) {
+      /* If field is a substruct, we have to indicate to machine state
+       * handler that a new function able to parse that struct shall be
+       * called
+       */
+      WF ( file, "\\[%s\\]{S}*={S}*{NN}\t\t{ return E_%s; }\n", field->field_name, field->FIELD_NAME );
+    } else if ( field->type->type_ind == E_BASIC_TYPE && field->type->u_desc.type_desc == STRING_t ) {
+      /* If field is of type "string_t", we have to remove the '"' sign
+       * from the start and the end of the string
+       */
+      WF ( file, "%s{S}*={S}*\"\t\t{ %s.str = strdup(yytext); return E_%s; }\n", field->field_name, SHARED_VAL, field->FIELD_NAME );
+    } else {
+      /* If field is of type "simple", meaning int, float..., well we
+       * shall parse directly what happens next to the '=' sign
+       */
+      WF ( file, "%s{S}*={S}*{NN}\t\t{ BEGIN %s; %s = E_%s; }\n", field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
     }
   }
 
-  for ( etype = types->next; etype != NULL; etype = etype->next ) {
+  for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
     WF ( file, "\t/* Parsing %s %s vals */\n", (etype->type_ind == E_STRUCT) ? "struct" : (etype->type_ind == E_ENUM ) ? "enum" : "basic type", etype->type_name );
-    if ( etype->type_ind == E_STRUCT ) {
-      for ( field = etype->u_desc.struct_desc.list_of_fields;
-            field != NULL;
-            field = field->next ) {
-        if ( field->type->type_ind == E_STRUCT ) {
-          /* If field is a substruct, we have to indicate to machine state
-           * handler that a new function able to parse that struct shall be
-           * called
-           */
-          WF ( file, "<%s>[%s]{S}*={S}*{NN}\t\t{ BEGIN %s; return E_%s; }\n", etype->TYPE_NAME, field->field_name, field->type->TYPE_NAME, field->FIELD_NAME );
-        } else if ( field->type->type_ind == E_BASIC_TYPE && field->type->u_desc.type_desc == STRING_t ) {
-          /* If field is of type "string_t", we have to remove the '"' sign
-           * from the start and the end of the string
-           */
-          WF ( file, "<%s>%s{S}*={S}*\"\t\t{ BEGIN %s; %s = E_%s; }\n", etype->TYPE_NAME, field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
-        } else {
-          /* If field is of type "simple", meaning int, float..., well we
-           * shall parse directly what happens next to the '=' sign
-           */
-          WF ( file, "<%s>%s{S}*={S}*{NN}\t\t{ BEGIN %s; %s = E_%s; }\n", etype->TYPE_NAME, field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
-        }
-        WF ( file, "\"[/%s]\"\t\t{ BEGIN 0; return END_STRUCT; }\n", etype->
-      }
-    } else if ( etype->type_ind == E_BASIC_TYPE && etype->u_desc.type_desc != STRING_t ) {
+    if ( etype->type_ind == E_BASIC_TYPE && etype->u_desc.type_desc != STRING_t ) {
       WF ( file, "<%s>[^[:space:]\\n]+\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return %s; }\n", etype->TYPE_NAME, SHARED_VAL, FIELD_GLOB);
     } else if ( etype->type_ind == E_BASIC_TYPE ) { /* it remains string_t */
       WF ( file, "<%s>.*[^\\]\"\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return E_%s; }\n", etype->TYPE_NAME, SHARED_VAL, etype->TYPE_NAME );
@@ -396,11 +408,16 @@ int make_header ( FILE *header, char *cc, struct type_desc *list_of_types, char 
 
 int make_lex_file ( FILE *file, struct type_desc *types, char *header_filename, char *config_functionname, char *lexoutfilename, char *lexoutheaderfilename )
 {
+  struct field **list_of_fields;
+  unsigned int nb_fields = 0;
+  int ret;
+
   if ( file == NULL || types == NULL || header_filename == NULL ) return -1;
 
-  _do_lex_header ( file, types, header_filename );
+  ret = _make_uniq_field_list ( types, &list_of_fields, &nb_fields );
+  _do_lex_header ( file, list_of_fields, nb_fields, types, header_filename );
   _do_lex_state_defs ( file, types, lexoutfilename, lexoutheaderfilename );
   _do_lex_options ( file, lexoutfilename, lexoutheaderfilename );
   _do_lex_easy_symbol ( file );
-  _do_lex_machine_state ( file, types );
+  _do_lex_machine_state ( file, types, list_of_fields, nb_fields );
 }
