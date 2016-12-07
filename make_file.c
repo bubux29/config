@@ -372,6 +372,32 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
   WF ( file, "%%%%\n");
 }
 
+static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
+{
+  struct type_desc *etype;
+  struct field *field;
+
+  if ( file == NULL || list_of_types == NULL ) return;
+
+  for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
+    if ( etype->type_ind == E_STRUCT ) {
+      WF ( file, "static struct %s * _parse_%s ( FILE *in )\n{\n", etype->type_name, etype->TYPE_NAME );
+      WF ( file, "  int ret;\n  enum lex_return token;\n");
+      WF ( file, "  struct %s *p = calloc (1, sizeof(*p));\n\n", etype->type_name);
+      WF ( file, "  if ( ! p ) return NULL;\n\n");
+      WF ( file, "  while (ret == 0 && (token = yylex())) {\n" );
+      WF ( file, "    switch ( token ) {\n" );
+      for  ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
+        WF ( file, "      case E_%s:\n", field->FIELD_NAME );
+        WF ( file, "      break;\n" );
+      }
+      WF ( file, "      default: ret = 1;\n" );
+      WF ( file, "  }\n\n" );
+      WF ( file, "}\n\n" );
+    }
+  }
+}
+
 /************************/
 /** EXPORTED PROTOYPES **/
 /************************/
@@ -423,4 +449,5 @@ int make_lex_file ( FILE *file, struct type_desc *types, char *header_filename, 
   _do_lex_options ( file, lexoutfilename, lexoutheaderfilename );
   _do_lex_easy_symbol ( file );
   _do_lex_machine_state ( file, types, list_of_fields, nb_fields );
+  _do_lex_parse_funcs ( file, types );
 }

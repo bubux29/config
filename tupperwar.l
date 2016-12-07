@@ -257,6 +257,7 @@ static char *_to_uppername ( char *name )
   if ( NAME == NULL ) return NAME;
   /* TODO: take care of wide chars... if any in UTF-8 mode */
 #define TOUPPER(c) ((c) >= 'a' && (c) <= 'z') ? ((c) - 'a' + 'A') :  \
+                   ((c) >= 'A' && (c) <= 'Z' ) ? (c) : \
                    ((c) >= '0' && (c) <= '9') ? (c): '_'
   for ( c = NAME; *c != '\0'; c++ ) {
     *c = TOUPPER(*c);
