@@ -135,6 +135,7 @@ static int _append_or_not ( struct field *field, struct field ***plist_of_fields
     }
     printf ("appending %s at %p\n", field->field_name, *plist_of_fields);
     *plist_of_fields[0] = field;
+    *size_of_list += 1;
     return 0;
   }
 
@@ -157,7 +158,7 @@ static int _append_or_not ( struct field *field, struct field ***plist_of_fields
     free ( plist_of_fields );
     return -2;
   }
-  printf ("New allocated space at: %p\n", *plist_of_fields);
+  printf ("New allocated space at: %p (%d)\n", *plist_of_fields, *size_of_list);
   *plist_of_fields = pnew;
   (*plist_of_fields)[*size_of_list-1] = field;
   printf ("First elem is: %s\n", (*plist_of_fields)[0]->FIELD_NAME);
@@ -298,10 +299,11 @@ static void _do_lex_extra_rules ( FILE *file )
     WF ( file,
 "<CLOSE_LINE>[^[:space:]]\t{ BEGIN SYNTAX_FILE_ERROR; }\n"
 "<CLOSE_LINE>[^\\n]\t;/* nothing to do */\n"
-"<CLOSE_LINE>\\n\t{ line_counter++; }\n"
+"<CLOSE_LINE>\\n\t{ line_counter++; return %s; }\n"
 ".\t\t{ BEGIN SYNTAX_FILE_ERROR; yymore(); }\n"
 "<SYNTAX_FILE_ERROR>\\n\t{ error(\"OhoNo! Unexpected token at line %%d: %%s\", line_counter, yytext); }\n"
-"<SYNTAX_FILE_ERROR>[^\\n]\t{ yymore(); }\n"
+"<SYNTAX_FILE_ERROR>[^\\n]\t{ yymore(); }\n",
+FIELD_GLOB
     );
 }
 
@@ -337,7 +339,8 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
        * handler that a new function able to parse that struct shall be
        * called
        */
-      WF ( file, "\\[%s\\]{S}*={S}*{NN}\t\t{ return E_%s; }\n", field->field_name, field->FIELD_NAME );
+      WF ( file, "\\[%s\\]\t\t{ BEGIN CLOSE_LINE; %s = E_%s; }\n", field->field_name, FIELD_GLOB, field->FIELD_NAME );
+      WF ( file, "\\[\\/%s\\]\t\t{ BEGIN CLOSE_LINE; %s = E_END_DEF_STRUCT; }\n", field->field_name, FIELD_GLOB );
     } else if ( field->type->type_ind == E_BASIC_TYPE && field->type->u_desc.type_desc == STRING_t ) {
       /* If field is of type "string_t", we have to remove the '"' sign
        * from the start and the end of the string
@@ -347,7 +350,7 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
       /* If field is of type "simple", meaning int, float..., well we
        * shall parse directly what happens next to the '=' sign
        */
-      WF ( file, "%s{S}*={S}*{NN}\t\t{ BEGIN %s; %s = E_%s; }\n", field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
+      WF ( file, "%s{S}*={S}*\t\t{ BEGIN %s; %s = E_%s; }\n", field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
     }
   }
 

@@ -62,7 +62,6 @@ union shared_val options = { .str = NULL, };
 
 %}
 
-S	[[:space:]]
 /* Definition des etats */
 %x NEW_LEVEL COUNT_LEVEL NEW_ENUM ENUM_VARNAME ENUM_VAL NEW_TYPE FLUSH_LINE UNSIGNED HANDLE_ERROR TEST_TYPE_LIST NEW_LEVEL_NAME
 
@@ -257,7 +256,8 @@ static char *_to_uppername ( char *name )
   NAME = strndup (name, 32);
   if ( NAME == NULL ) return NAME;
   /* TODO: take care of wide chars... if any in UTF-8 mode */
-#define TOUPPER(c) ((c) >= 'a' && (c) <= 'z') ? ((c) - 'a' + 'A') : (c)
+#define TOUPPER(c) ((c) >= 'a' && (c) <= 'z') ? ((c) - 'a' + 'A') :  \
+                   ((c) >= '0' && (c) <= '9') ? (c): '_'
   for ( c = NAME; *c != '\0'; c++ ) {
     *c = TOUPPER(*c);
   }
@@ -368,8 +368,8 @@ int main (int argc, char **argv)
   struct type_desc *list_of_types = NULL, *etype = NULL;
   char *headerfilename = "/tmp/aware_types.h";
   char *lexfilename = "/tmp/toto.l";
-  char *lexoutputfilename = "toto.c";
-  char *lexoutputheaderfilename = "toto.h";
+  char *lexoutfilename = "toto.c";
+  char *lexoutheaderfilename = "toto.h";
   const char *cc = "AWARE_TYPES_H";
   char *config_functionname = "parse_config";
   FILE *header, *lex_file;
@@ -467,7 +467,7 @@ int main (int argc, char **argv)
   header = fopen ( headerfilename, "w" );
   lex_file = fopen ( lexfilename, "w" );
   make_header ( header, cc, list_of_types, config_functionname );
-  make_lex_file ( lex_file, list_of_types, headerfilename, config_functionname, lexoutputfilename, lexoutputheaderfilename );
+  make_lex_file ( lex_file, list_of_types, headerfilename, config_functionname, lexoutfilename, lexoutheaderfilename );
   fclose ( header ); fclose ( lex_file );
   return 0;
 }
