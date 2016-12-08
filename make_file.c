@@ -64,6 +64,7 @@ void show_enum ( struct type_desc *type, FILE *file )
     case E_ENUM:
       WF ( file, "enum %s {\n", type->type_name);
       pv  = type->u_desc.enum_desc.values;
+      WF ( file, "\tE_IMPOSSIBLE_%s = -1,\n", type->TYPE_NAME );
       if ( pv != NULL ) {
         WF ( file, "\t%s = 1,\n", pv->enum_name);
       }
@@ -141,11 +142,11 @@ static int _append_or_not ( struct field *field, struct field ***plist_of_fields
 
   for ( fieldindex = 0; fieldindex < *size_of_list; fieldindex++ ) {
     if ( strcmp ( field->field_name, (*plist_of_fields)[fieldindex]->field_name) == 0 ) {
-      if ( field->type->type_ind == (*plist_of_fields)[fieldindex]->type->type_ind ) {
+      if ( field->type == (*plist_of_fields)[fieldindex]->type ) {
         printf ("Have found already defined fieldname: %s\n", field->field_name);
         return 0;
       } else {
-        printf ("Field from: %s\n", (*plist_of_fields)[fieldindex]->type->type_name);
+        printf ("Field with name <%s> already defined but with different type: %s/%s\n", field->field_name, field->type->type_name, (*plist_of_fields)[fieldindex]->type->type_name);
         return 1;
       }
     }
@@ -158,10 +159,9 @@ static int _append_or_not ( struct field *field, struct field ***plist_of_fields
     free ( plist_of_fields );
     return -2;
   }
-  printf ("New allocated space at: %p (%d)\n", *plist_of_fields, *size_of_list);
+  /*printf ("New allocated space at: %p (%d)\n", *plist_of_fields, *size_of_list);*/
   *plist_of_fields = pnew;
   (*plist_of_fields)[*size_of_list-1] = field;
-  printf ("First elem is: %s\n", (*plist_of_fields)[0]->FIELD_NAME);
 
   return 0;
 }
@@ -372,6 +372,17 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
   WF ( file, "%%%%\n");
 }
 
+static void _do_lex_string_to_basic ( FILE *file, struct type_desc *list_of_types )
+{
+  struct type_desc *etype;
+
+  for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
+    if ( etype->type_ind == E_BASIC_TYPE ) {
+
+    }
+  }
+}
+
 static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
 {
   struct type_desc *etype;
@@ -384,15 +395,28 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
       WF ( file, "static struct %s * _parse_%s ( FILE *in )\n{\n", etype->type_name, etype->TYPE_NAME );
       WF ( file, "  int ret;\n  enum lex_return token;\n");
       WF ( file, "  struct %s *p = calloc (1, sizeof(*p));\n\n", etype->type_name);
+      WF ( file, "  /** TODO: do an init of the structure according to what is inside */\n");
       WF ( file, "  if ( ! p ) return NULL;\n\n");
       WF ( file, "  while (ret == 0 && (token = yylex())) {\n" );
       WF ( file, "    switch ( token ) {\n" );
       for  ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
         WF ( file, "      case E_%s:\n", field->FIELD_NAME );
+        if ( field->type->type_ind == E_ENUM ) {
+          WF ( file, "         p->%s = %s.e_%s;\n", field->field_name, SHARED_VAL, field->type->type_name );
+        } else if ( field->type->type_ind == E_STRUCT ) {
+          WF ( file, "         p->%s = _parse_%s();\n", field->field_name, field->type->TYPE_NAME );
+          WF ( file, "         if ( p->%s == NULL ) {\n", field->field_name );
+          WF ( file, "           ret = 1; /* The error has been told by function */\n" );
+          WF ( file, "         }\n" );
+        }
         WF ( file, "      break;\n" );
       }
-      WF ( file, "      default: ret = 1;\n" );
+      WF ( file, "      default:\n");
+      WF ( file, "        ret = 1;\n" );
+      WF ( file, "        error ( \"ERROR: unexpected token at line %%d: %%s\\n\", line_counter, yytext() );\n");
       WF ( file, "  }\n\n" );
+      WF ( file ,"  /** TODO: integrity check if any value is missing */\n" );
+      WF ( file, "  return ret;\n");
       WF ( file, "}\n\n" );
     }
   }
@@ -449,5 +473,6 @@ int make_lex_file ( FILE *file, struct type_desc *types, char *header_filename, 
   _do_lex_options ( file, lexoutfilename, lexoutheaderfilename );
   _do_lex_easy_symbol ( file );
   _do_lex_machine_state ( file, types, list_of_fields, nb_fields );
+  _do_lex_string_to_basic ( file, types );
   _do_lex_parse_funcs ( file, types );
 }
