@@ -234,11 +234,12 @@ static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, uns
   for ( u_field = 0; u_field < nb_uniq_fields; u_field++ ) {
     WF ( file, "  E_%s,\n", list_of_uniq_fields[u_field]->FIELD_NAME );
   }
+  WF ( file, "  E_END_DEF_STRUCT\n" );
   WF ( file, "};\n" );
 
   /* Declare and zeroise the shared value */
   if ( name_to_zeroise != NULL )
-    WF ( file, "\nunion lex_opt %s = { .%s = NULL };\n", SHARED_VAL, name_to_zeroise );
+    WF ( file, "\nunion lex_opt %s = { .e_%s = 0 };\n", SHARED_VAL, name_to_zeroise );
 
   WF ( file, "enum lex_return %s = -1;\n\n", FIELD_GLOB );
 
@@ -362,7 +363,7 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
       WF ( file, "<%s>.*[^\\]\"\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return E_%s; }\n", etype->TYPE_NAME, SHARED_VAL, etype->TYPE_NAME );
     } else if ( etype->type_ind == E_ENUM ) {
       for ( val = etype->u_desc.enum_desc.values; val != NULL; val = val->next ) {
-        WF ( file, "<%s>\"%s\"\t\t{ BEGIN CLOSE_LINE; %s.e_%s = %s; return %s; }\n", etype->TYPE_NAME, val->name, SHARED_VAL, etype->type_name, val->enum_name, FIELD_GLOB );
+        WF ( file, "<%s>\"%s\"\t\t{ BEGIN CLOSE_LINE; %s.e_%s = %s; return %s; }\n", etype->TYPE_NAME, val->name, SHARED_VAL, etype->type_name, val->enum_name, FIELD_GLOB );
       }
       WF ( file, "<%s>.\t\t{ BEGIN SYNTAX_FILE_ERROR; }\n", etype->TYPE_NAME );
     }
@@ -390,33 +391,88 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
 
   if ( file == NULL || list_of_types == NULL ) return;
 
+  /* First of all declare static prototypes */
   for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
     if ( etype->type_ind == E_STRUCT ) {
-      WF ( file, "static struct %s * _parse_%s ( FILE *in )\n{\n", etype->type_name, etype->TYPE_NAME );
-      WF ( file, "  int ret;\n  enum lex_return token;\n");
+      WF ( file, "static struct %s * _parse_%s ( void );\n", etype->type_name, etype->TYPE_NAME );
+    }
+  }
+  
+  for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
+    if ( etype->type_ind == E_STRUCT ) {
+      WF ( file, "static struct %s * _parse_%s ( void )\n{\n", etype->type_name, etype->TYPE_NAME );
+      /** Variable declaration **/
+      WF ( file, "  int ret = 0;\n  enum lex_return token;\n");
       WF ( file, "  struct %s *p = calloc (1, sizeof(*p));\n\n", etype->type_name);
-      WF ( file, "  /** TODO: do an init of the structure according to what is inside */\n");
       WF ( file, "  if ( ! p ) return NULL;\n\n");
+
+      /** Structure initialisation **/
+      for ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
+        switch ( field->type->type_ind ) {
+          case E_STRUCT:
+            WF ( file, "  p->%s = NULL;\n", field->field_name );
+          break;
+          case E_ENUM:
+            WF ( file, "  p->%s = E_IMPOSSIBLE_%s;\n", field->field_name, field->type->TYPE_NAME );
+          break;
+          case E_BASIC_TYPE:
+          default:
+            /* rien a faire... grace au calloc :-) */
+          break;
+        }
+      }
+      WF ( file, "\n" );
+
+      /* yylex loop parsing */
       WF ( file, "  while (ret == 0 && (token = yylex())) {\n" );
       WF ( file, "    switch ( token ) {\n" );
       for  ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
         WF ( file, "      case E_%s:\n", field->FIELD_NAME );
-        if ( field->type->type_ind == E_ENUM ) {
-          WF ( file, "         p->%s = %s.e_%s;\n", field->field_name, SHARED_VAL, field->type->type_name );
-        } else if ( field->type->type_ind == E_STRUCT ) {
-          WF ( file, "         p->%s = _parse_%s();\n", field->field_name, field->type->TYPE_NAME );
-          WF ( file, "         if ( p->%s == NULL ) {\n", field->field_name );
-          WF ( file, "           ret = 1; /* The error has been told by function */\n" );
-          WF ( file, "         }\n" );
+        if ( !field->is_a_list ) {
+          WF ( file, "         /* Get only last value set */\n" );
+          if ( field->type->type_ind == E_ENUM ) {
+            WF ( file, "         p->%s = %s.e_%s;\n", field->field_name, SHARED_VAL, field->type->type_name );
+          } else if ( field->type->type_ind == E_STRUCT ) {
+            WF ( file, "         p->%s = _parse_%s();\n", field->field_name, field->type->TYPE_NAME );
+            WF ( file, "         if ( p->%s == NULL ) {\n", field->field_name );
+            WF ( file, "           ret = 1; /* The error has been told by function */\n" );
+            WF ( file, "         }\n" );
+          } else if ( field->type->type_ind == E_BASIC_TYPE ) {
+            WF ( file, "         p->%s = %s.e_%s;\n", field->field_name, SHARED_VAL, field->type->TYPE_NAME );
+          }
+        } else {
+          if ( field->type->type_ind == E_ENUM ) {
+            WF ( file, "           ret = _append ( &p->%s, %s.e_%s );\n",
+                           field->field_name, SHARED_VAL, field->type->type_name );
+          } else if ( field->type->type_ind == E_BASIC_TYPE ) {
+            WF ( file, "           ret = _append ( &p->%s, %s.e_%s );\n",
+                           field->field_name, SHARED_VAL, field->type->TYPE_NAME );
+          } else {
+            WF ( file, "           ret = _append ( &p->%s, _parse_%s );\n",
+                           field->field_name, field->type->TYPE_NAME );
+          }
         }
         WF ( file, "      break;\n" );
       }
       WF ( file, "      default:\n");
       WF ( file, "        ret = 1;\n" );
-      WF ( file, "        error ( \"ERROR: unexpected token at line %%d: %%s\\n\", line_counter, yytext() );\n");
+      WF ( file, "        error ( \"ERROR: unexpected token at line %%d: %%s\\n\", line_counter, yytext );\n");
+      WF ( file, "    }\n" );
       WF ( file, "  }\n\n" );
-      WF ( file ,"  /** TODO: integrity check if any value is missing */\n" );
-      WF ( file, "  return ret;\n");
+      WF ( file, "  /** TODO: integrity check if any value is missing */\n" );
+      WF ( file, "  if ( ret != 0 ) {\n" );
+      for  ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
+        if ( field->type->type_ind == E_STRUCT ) {
+          WF ( file, "    _free_%s ( p->%s );\n", field->type->TYPE_NAME, field->field_name );
+        } else if ( field->is_a_list ) {
+          WF ( file, "    if ( p->%s != NULL ) {\n", field->field_name );
+          WF ( file, "      free ( p->%s );\n", field->field_name );
+          WF ( file, "    }\n" );
+        }
+      }
+      WF ( file, "    free (p);\n" );
+      WF ( file, "  }\n\n" );
+      WF ( file, "  return p;\n");
       WF ( file, "}\n\n" );
     }
   }
