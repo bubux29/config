@@ -10,7 +10,7 @@
 		[levelQ] patoq
 			int cul
 			char bite
-	[levelZ] zizi
+	[levelZ] zizi[]
 		char champignon
 		char patate
 		[gpt]
