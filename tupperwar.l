@@ -190,9 +190,11 @@ double_t[ ]+	{
 			}
 <NEW_LEVEL_NAME>\n	{ BEGIN 0; line_counter++; }
 <NEW_LEVEL_NAME>[ ]+	;
-<NEW_LEVEL_NAME>[^\n]+	{ options.str = strdup (yytext);
-			return E_FIELD_NAME;
-			}
+<NEW_LEVEL_NAME>[^\n\[]+	{
+				options.str = strdup (yytext);
+				BEGIN TEST_TYPE_LIST;
+				return E_FIELD_NAME;
+				}
 <FLUSH_LINE>[^ \t\n]	{
 			BEGIN HANDLE_ERROR;
 			yymore();
