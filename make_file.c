@@ -31,15 +31,45 @@ static void _show_field ( struct field *field, FILE *file )
 {
   if ( field == NULL ) return;
   WF (file, "\t");
-  _show_type ( field->type, file );
-  if ( field->is_a_list == 1 ) WF ( file, "*");
-  WF ( file, " %s", field->field_name);
+  if ( field->is_a_list == 1 ) {
+    WF ( file, "struct list_elem head_of_");
+  } else {
+    _show_type ( field->type, file );
+  }
+  WF ( file, "%s", field->field_name);
   WF ( file, ";\n");
 }
 
 /**************************************/
 /** For header type file declaration **/
 /**************************************/
+
+void _declare_extra_type ( FILE *file )
+{
+  if ( file == NULL ) return;
+
+  WF ( file, "/*\n"
+" * The following defines helpers to play with list of element,\n"
+" * independantly of type of element.\n"
+" * Please consider this as Linux-kernel inspired\n"
+" */\n\n" );
+  WF ( file, "struct list_elem {\n  void *elem;\n\n  ssize_t elem_size;\n  struct list_elem *next;\n  struct list_elem *prev;\n};\n\n");
+
+  /* Declare helper macros to run through double-chained list */
+  WF ( file, 
+"#define for_each_elem(head,cur)                             \\\n"
+"    for (cur = (head)->next; cur != (head); cur = cur->next)\n\n"
+"#define for_each_elem_safe(head,cur,sav)                     \\\n"
+"    for ( cur = (head)->next, sav = cur->next; cur != (head);\\\n"
+"          cur = sav, sav = cur->next )\n\n"
+"#define append_elem(head,cur)                      \\\n"
+"    cur->prev = (head)->prev; cur->next = head;    \\\n"
+"    (head)->prev = cur; ((head)->prev)->next = cur;\n\n"
+"#define init_head(head) \\\n"
+"    (head)->next = head;  \\\n"
+"    (head)->prev = head;\n\n"
+  );
+}
 
 void declare_complex_type ( struct type_desc *type, FILE *file )
 {
@@ -384,6 +414,89 @@ static void _do_lex_string_to_basic ( FILE *file, struct type_desc *list_of_type
   }
 }
 
+static void _do_helper_funcs ( FILE *file, struct type_desc *list_of_types )
+{
+  struct type_desc *etype;
+  struct field *field;
+
+  if ( file == NULL || list_of_types == NULL ) return;
+
+  WF ( file, "static int _append ( struct list_elem *head, void *value, ssize_t sot )\n"
+"{\n"
+"  struct list_elem *elem = (struct list_elem *) calloc (1, sizeof (*elem));\n\n"
+"  if ( elem == NULL ) return -1;\n"
+"  if ( head == NULL || value == NULL ) {\n"
+"    free ( elem );\n    return -2;\n  }\n\n"
+"  elem->elem_size = sot;\n"
+"  elem->elem = value;\n"
+"  append_elem ( head, elem );\n"
+"  return 0;\n"
+"}\n\n"
+  );
+
+  WF ( file, 
+"#define _append_basic(h,v,type,ret) do { \\\n"
+"    type * e = malloc (sizeof(type)); \\\n"
+"    if ( e != NULL ) *e = v; \\\n"
+"    ret =_append ( h, e, sizeof(*e) ); \\\n  } while(0)\n\n"
+  );
+}
+
+static void _print_erase_elem ( FILE *file, struct type_desc *etype, const char *pointer_name, const char *curname, const char *savname )
+{
+  struct field *field;
+
+  if ( file == NULL || etype == NULL || pointer_name == NULL || curname == NULL || savname == NULL ) return;
+
+  for ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
+    if ( field->is_a_list ) {
+      WF ( file, "  for_each_elem_safe(&%s->head_of_%s, %s, %s) {\n", pointer_name, field->field_name, curname, savname );
+      if ( field->type->type_ind == E_STRUCT ) {
+        WF ( file, "    _free_%s ((struct %s*) %s->elem);\n", field->type->TYPE_NAME, field->type->type_name, curname );
+      } else {
+        WF ( file, "    free ( %s->elem );\n", curname );
+      }
+      WF ( file, "    free ( %s );\n  }\n\n", curname);
+    } else if ( field->type->type_ind == E_STRUCT ) {
+      WF ( file, "  _free_%s (p->%s);\n", field->type->TYPE_NAME, field->field_name );
+    }
+  }
+}
+
+
+static void _do_free_funcs ( FILE *file, struct type_desc * list_of_types )
+{
+  struct type_desc *etype;
+  struct field *field;
+
+  if ( file == NULL || list_of_types == NULL ) return;
+  /* First of all declare static prototypes */
+  for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
+    if ( etype->type_ind == E_STRUCT ) {
+      WF ( file, "static void _free_%s ( struct %s * );\n", etype->TYPE_NAME, etype->type_name );
+    }
+  }
+  WF ( file, "\n\n" );
+
+  for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
+    if ( etype->type_ind == E_STRUCT ) {
+      WF ( file, "static void _free_%s ( struct %s *p )\n", etype->TYPE_NAME, etype->type_name );
+      WF ( file, "{\n" );
+      /* Do we need to declare list_elem */
+      for ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL;
+            field = field->next ) {
+        if ( field->is_a_list == 1 ) {
+          WF ( file, "  struct list_elem *elem, *sav;\n\n" );
+          break;
+        }
+      }
+      WF ( file, "  if ( p == NULL ) return;\n\n" );
+      _print_erase_elem ( file, etype, "p", "elem", "sav" );
+      WF (file, "\n}\n\n");
+    }
+  }
+}
+
 static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
 {
   struct type_desc *etype;
@@ -403,22 +516,32 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
       WF ( file, "static struct %s * _parse_%s ( void )\n{\n", etype->type_name, etype->TYPE_NAME );
       /** Variable declaration **/
       WF ( file, "  int ret = 0;\n  enum lex_return token;\n");
+      for ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
+        if ( field->is_a_list == 1 ) {
+          WF ( file, "  struct list_elem *cur, *sav;\n" );
+          break;
+        }
+      }
       WF ( file, "  struct %s *p = calloc (1, sizeof(*p));\n\n", etype->type_name);
       WF ( file, "  if ( ! p ) return NULL;\n\n");
 
       /** Structure initialisation **/
       for ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
-        switch ( field->type->type_ind ) {
-          case E_STRUCT:
-            WF ( file, "  p->%s = NULL;\n", field->field_name );
-          break;
-          case E_ENUM:
-            WF ( file, "  p->%s = E_IMPOSSIBLE_%s;\n", field->field_name, field->type->TYPE_NAME );
-          break;
-          case E_BASIC_TYPE:
-          default:
-            /* rien a faire... grace au calloc :-) */
-          break;
+        if ( field->is_a_list == 1 ) {
+          WF ( file, "  init_head( &p->head_of_%s );\n", field->field_name );
+        } else {
+          switch ( field->type->type_ind ) {
+            case E_STRUCT:
+              WF ( file, "  p->%s = NULL;\n", field->field_name );
+            break;
+            case E_ENUM:
+              WF ( file, "  p->%s = E_IMPOSSIBLE_%s;\n", field->field_name, field->type->TYPE_NAME );
+            break;
+            case E_BASIC_TYPE:
+            default:
+              /* rien a faire... grace au calloc :-) */
+            break;
+          }
         }
       }
       WF ( file, "\n" );
@@ -442,14 +565,14 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
           }
         } else {
           if ( field->type->type_ind == E_ENUM ) {
-            WF ( file, "           ret = _append ( &p->%s, %s.e_%s );\n",
-                           field->field_name, SHARED_VAL, field->type->type_name );
+            WF ( file, "           _append_basic ( &p->head_of_%s, %s.e_%s, enum %s, ret );\n",
+                           field->field_name, SHARED_VAL, field->type->type_name, field->type->type_name );
           } else if ( field->type->type_ind == E_BASIC_TYPE ) {
-            WF ( file, "           ret = _append ( &p->%s, %s.e_%s );\n",
-                           field->field_name, SHARED_VAL, field->type->TYPE_NAME );
+            WF ( file, "           _append_basic ( &p->head_of_%s, %s.e_%s, %s, ret );\n",
+                           field->field_name, SHARED_VAL, field->type->TYPE_NAME, field->type->type_name );
           } else {
-            WF ( file, "           ret = _append ( &p->%s, _parse_%s );\n",
-                           field->field_name, field->type->TYPE_NAME );
+            WF ( file, "           ret = _append ( &p->head_of_%s, _parse_%s(), sizeof(struct %s) );\n",
+                           field->field_name, field->type->TYPE_NAME, field->type->type_name );
           }
         }
         WF ( file, "      break;\n" );
@@ -461,15 +584,7 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
       WF ( file, "  }\n\n" );
       WF ( file, "  /** TODO: integrity check if any value is missing */\n" );
       WF ( file, "  if ( ret != 0 ) {\n" );
-      for  ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
-        if ( field->type->type_ind == E_STRUCT ) {
-          WF ( file, "    _free_%s ( p->%s );\n", field->type->TYPE_NAME, field->field_name );
-        } else if ( field->is_a_list ) {
-          WF ( file, "    if ( p->%s != NULL ) {\n", field->field_name );
-          WF ( file, "      free ( p->%s );\n", field->field_name );
-          WF ( file, "    }\n" );
-        }
-      }
+      _print_erase_elem ( file, etype, "p", "cur", "sav" );
       WF ( file, "    free (p);\n" );
       WF ( file, "  }\n\n" );
       WF ( file, "  return p;\n");
@@ -495,6 +610,8 @@ int make_header ( FILE *header, char *cc, struct type_desc *list_of_types, char 
   for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
     declare_complex_type(etype, header);
   }
+  fprintf ( header, "\n\n");
+  _declare_extra_type ( header );
   fprintf (header, "\n\n"
 "/**********************/\n"
 "/** TYPE DEFINITIONS **/\n"
@@ -530,5 +647,7 @@ int make_lex_file ( FILE *file, struct type_desc *types, char *header_filename, 
   _do_lex_easy_symbol ( file );
   _do_lex_machine_state ( file, types, list_of_fields, nb_fields );
   _do_lex_string_to_basic ( file, types );
+  _do_free_funcs ( file, types );
+  _do_helper_funcs ( file, types );
   _do_lex_parse_funcs ( file, types );
 }
