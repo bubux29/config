@@ -128,7 +128,9 @@ void show_function ( struct type_desc *types, FILE *file, char *func )
 {
   if (types == NULL || file == NULL || func == NULL) return;
 
-  WF (file, "int %s ( FILE *streamin, struct %s **pconfig_out );\n",
+  WF (file, "int f%s ( FILE *streamin, struct %s **pconfig_out );\n",
+           func, types->type_name );
+  WF ( file, "int %s ( const char *path, struct %s **pconfig_out );\n",
            func, types->type_name );
 }
 
@@ -236,10 +238,9 @@ static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, uns
 "#include <stdio.h>\n"
 "#include \"%s\"\n"
 "\n"
-"int yywrap(void);\n"
+"int yywrap(void)\n{\n  return 1;\n}"
 "\n"
 "static int line_counter = 1;\n"
-"static int level_counter = 0;\n"
 "\n",
     (strrchr( header_filename, '/' )) + 1 );
 
@@ -593,6 +594,98 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
   }
 }
 
+static void _do_lex_main_entry ( FILE *file, struct type_desc *list_of_types, const char *funcname )
+{
+  struct type_desc *etype;
+
+  if ( file == NULL || funcname == NULL ) return;
+
+  WF ( file, "static int _main_parse ( struct %s **pconfig_out )\n"
+"{\n"
+"  if ( pconfig_out != NULL ) {\n"
+"    *pconfig_out = _parse_%s();\n"
+"  } else {\n"
+"    return -3;\n"
+"  }\n"
+"  return (*pconfig_out != NULL) ? 0:-4;\n"
+"}\n\n"
+, list_of_types->type_name, list_of_types->TYPE_NAME
+  );
+  WF ( file, "int\nf%s ( FILE *streamin, struct %s **pconfig_out )\n",
+           funcname, list_of_types->type_name );
+  WF ( file,
+"{\n"
+"  int res, ret = 0;\n\n"
+"  if ( streamin == NULL || pconfig_out == NULL ) return -1;\n\n"
+"  *pconfig_out = ( struct %s *) calloc ( 1, sizeof (struct %s) );\n"
+"  if ( *pconfig_out == NULL ) return -2;\n\n"
+"  yyin = streamin;\n"
+"  return _main_parse( pconfig_out );\n"
+"}\n\n"
+, list_of_types->type_name, list_of_types->type_name
+  );
+  WF ( file, "int\n%s ( const char *path, struct %s **pconfig_out )\n",
+           funcname, list_of_types->type_name );
+  WF ( file,
+"{\n"
+"  FILE *f;\n"
+"  if ( path == NULL ) return -1;\n"
+"  f = fopen ( path, \"r\" );\n"
+"  return f%s ( f, pconfig_out );\n"
+"}\n\n"
+, funcname
+  );
+}
+
+/********************************/
+/** Makefile related functions **/
+/********************************/
+static void _do_lex_makefile ( FILE * file, const char * example, const char *headf, const char *lexoutf, const char *lexouth )
+{
+  char *o = strdup ( lexoutf );
+  char *q = strdup ( example );
+  char *p;
+  if ( o == NULL ) return;
+
+  p = strrchr ( o, 'c' );
+  if ( p != NULL ) *p = 'o';
+  p = strrchr ( q, '.' );
+  if ( p != NULL ) {
+    *(++p) = 'o'; *(++p) = '\0';
+  }
+
+  WF ( file, "LEX = flex\nYACC = bison\n\n" );
+  WF ( file, "all: example\n\nexample: %s %s\n", o, q );
+  WF ( file, "\t$(CC) -o $@ $^\n");
+  WF ( file, ".l.c:\n\t$(LEX) $^\n\n" );
+  WF ( file, "%s: %s\n\n", lexouth, lexoutf );
+  WF ( file, "clean:\n\t-rm -f %s %s %s\n", o, lexoutf, lexouth );
+  /*WF ( file, "libconfigparser.so: %s %s\n", o, headf );
+  WF ( file, "\t$(CC) $^ -o $@\n" );*/
+
+  free (o); free (q);
+}
+
+/***************************/
+/** Main example function **/
+/***************************/
+static void _do_main_example ( FILE *file, const char *funcname, const char *header, struct type_desc *list_of_types )
+{
+  WF ( file, "#include \"%s\"\n\n", header );
+  WF ( file, "int main ( int argc, char **argv )\n"
+"{\n"
+"  int ret;\n"
+"  struct %s *confroot = NULL;\n\n"
+"  if ( argc < 2 ) {\n"
+"    printf (\"usage: %%s <configfilepath>\\n\", argv[0] );"
+"    return -1;\n"
+"  }\n"
+"  ret = %s ( argv[1], &confroot );\n"
+"  return ret;\n"
+"}"
+  , list_of_types->type_name, funcname
+  );
+}
 /************************/
 /** EXPORTED PROTOYPES **/
 /************************/
@@ -650,4 +743,25 @@ int make_lex_file ( FILE *file, struct type_desc *types, char *header_filename, 
   _do_free_funcs ( file, types );
   _do_helper_funcs ( file, types );
   _do_lex_parse_funcs ( file, types );
+  _do_lex_main_entry ( file, types, config_functionname );
+
+  return ret;
+}
+
+int make_lex_main_example ( FILE *mainfile, const char *funcname, const char *headfilename, struct type_desc *list_of_types )
+{
+  if ( mainfile == NULL || headfilename == NULL || funcname == NULL || list_of_types == NULL ) return -1;
+
+  _do_main_example ( mainfile, funcname, headfilename, list_of_types );
+
+  return 0;
+}
+
+int make_lex_makefile ( FILE *makefile, const char *exfilename, const char *lexfilename, const char *headerfilename, const char *lexoutfilename, const char *lexoutheaderfilename )
+{
+  if ( makefile == NULL || exfilename == NULL || lexfilename == NULL || lexoutfilename == NULL || lexoutheaderfilename == NULL || headerfilename == NULL ) return -1;
+
+  _do_lex_makefile ( makefile, exfilename, headerfilename, lexoutfilename, lexoutheaderfilename );
+
+  return 0;
 }

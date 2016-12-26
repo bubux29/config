@@ -371,11 +371,14 @@ int main (int argc, char **argv)
   struct type_desc *list_of_types = NULL, *etype = NULL;
   char *headerfilename = "/tmp/aware_types.h";
   char *lexfilename = "/tmp/toto.l";
+  char *makefilename = "/tmp/Makefile";
   char *lexoutfilename = "toto.c";
   char *lexoutheaderfilename = "toto.h";
+  char *mainexfilename = "/tmp/main_ex.c";
+  char *c;
   const char *cc = "AWARE_TYPES_H";
   char *config_functionname = "parse_config";
-  FILE *header, *lex_file;
+  FILE *header, *lex_file, *makefile, *mainexfile;
 
   yyin = stdin;
 
@@ -469,8 +472,12 @@ int main (int argc, char **argv)
   printf ("\nHere is what I have found:\n");
   header = fopen ( headerfilename, "w" );
   lex_file = fopen ( lexfilename, "w" );
+  makefile = fopen ( makefilename, "w" );
+  mainexfile = fopen ( mainexfilename, "w" );
   make_header ( header, cc, list_of_types, config_functionname );
   make_lex_file ( lex_file, list_of_types, headerfilename, config_functionname, lexoutfilename, lexoutheaderfilename );
-  fclose ( header ); fclose ( lex_file );
+  make_lex_makefile ( makefile, ((c = strrchr ( mainexfilename, '/' ) ) == NULL )? mainexfilename : c + 1, lexfilename, headerfilename, lexoutfilename, lexoutheaderfilename );
+  make_lex_main_example ( mainexfile, config_functionname, lexoutheaderfilename, list_of_types );
+  fclose ( header ); fclose ( lex_file ); fclose ( mainexfile ); fclose ( makefile );
   return 0;
 }
