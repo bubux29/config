@@ -230,8 +230,14 @@ static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, uns
   struct field *efield;
   char *name_to_zeroise = NULL;
   unsigned int u_field;
+  int counter = 255;
+  char *fn;
 
   if ( file == NULL || header_filename == NULL || list_of_types == NULL ) return;
+
+  fn = strrchr ( header_filename, '/' );
+  if ( fn != NULL ) fn++;
+  else fn = header_filename;
 
   /* List any header */
   WF ( file, "%%{\n"
@@ -242,7 +248,10 @@ static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, uns
 "\n"
 "static int line_counter = 1;\n"
 "\n",
-    (strrchr( header_filename, '/' )) + 1 );
+    fn );
+
+  WF ( file, "#define error(format, ...) fprintf (stderr, \"%%s (%%d): \" format, __FUNCTION__, __LINE__, ##__VA_ARGS__)\n\n" );
+  WF ( file, "#define debug(format, ...) fprintf (stdout, \"%%s (%%d): \" format, __FUNCTION__, __LINE__, ##__VA_ARGS__)\n\n" );
 
   WF ( file, "union lex_opt {\n" );
 
@@ -262,11 +271,15 @@ static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, uns
    * same enum
    */
   WF ( file, "enum lex_return {\n" );
-  for ( u_field = 0; u_field < nb_uniq_fields; u_field++ ) {
-    WF ( file, "  E_%s,\n", list_of_uniq_fields[u_field]->FIELD_NAME );
+  for ( u_field = 0; u_field < nb_uniq_fields && counter > 0; u_field++ ) {
+    WF ( file, "  E_%s = %d,\n", list_of_uniq_fields[u_field]->FIELD_NAME, counter-- );
   }
-  WF ( file, "  E_END_DEF_STRUCT\n" );
+  WF ( file, "  E_END_DEF_STRUCT = %d\n", counter );
   WF ( file, "};\n" );
+
+  if ( counter == 0 ) {
+    /* TODO: This is an error... */
+  }
 
   /* Declare and zeroise the shared value */
   if ( name_to_zeroise != NULL )
@@ -331,9 +344,9 @@ static void _do_lex_extra_rules ( FILE *file )
     WF ( file,
 "<CLOSE_LINE>[^[:space:]]\t{ BEGIN SYNTAX_FILE_ERROR; }\n"
 "<CLOSE_LINE>[^\\n]\t;/* nothing to do */\n"
-"<CLOSE_LINE>\\n\t{ line_counter++; return %s; }\n"
+"<CLOSE_LINE>\\n\t{ line_counter++; BEGIN 0; return %s; }\n"
 ".\t\t{ BEGIN SYNTAX_FILE_ERROR; yymore(); }\n"
-"<SYNTAX_FILE_ERROR>\\n\t{ error(\"OhoNo! Unexpected token at line %%d: %%s\", line_counter, yytext); }\n"
+"<SYNTAX_FILE_ERROR>\\n\t{ error(\"OhoNo! Unexpected token at line %%d: %%s\", line_counter, yytext); return -1; }\n"
 "<SYNTAX_FILE_ERROR>[^\\n]\t{ yymore(); }\n",
 FIELD_GLOB
     );
@@ -371,7 +384,7 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
        * handler that a new function able to parse that struct shall be
        * called
        */
-      WF ( file, "\\[%s\\]\t\t{ BEGIN CLOSE_LINE; %s = E_%s; }\n", field->field_name, FIELD_GLOB, field->FIELD_NAME );
+      WF ( file, "\\[%s\\]\t\t{ BEGIN CLOSE_LINE; debug (\"I got %s (%%d)\\n\", line_counter); %s = E_%s; }\n", field->field_name, field->field_name, FIELD_GLOB, field->FIELD_NAME );
       WF ( file, "\\[\\/%s\\]\t\t{ BEGIN CLOSE_LINE; %s = E_END_DEF_STRUCT; }\n", field->field_name, FIELD_GLOB );
     } else if ( field->type->type_ind == E_BASIC_TYPE && field->type->u_desc.type_desc == STRING_t ) {
       /* If field is of type "string_t", we have to remove the '"' sign
@@ -382,7 +395,7 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
       /* If field is of type "simple", meaning int, float..., well we
        * shall parse directly what happens next to the '=' sign
        */
-      WF ( file, "%s{S}*={S}*\t\t{ BEGIN %s; %s = E_%s; }\n", field->field_name, field->type->TYPE_NAME, FIELD_GLOB, field->FIELD_NAME );
+      WF ( file, "%s{S}*={S}*\t\t{ BEGIN %s; debug (\"I got %s (%%d)\\n\", line_counter); %s = E_%s; }\n", field->field_name, field->type->TYPE_NAME, field->field_name, FIELD_GLOB, field->FIELD_NAME );
     }
   }
 
@@ -511,7 +524,8 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
       WF ( file, "static struct %s * _parse_%s ( void );\n", etype->type_name, etype->TYPE_NAME );
     }
   }
-  
+
+  WF ( file, "\n\n" );
   for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
     if ( etype->type_ind == E_STRUCT ) {
       WF ( file, "static struct %s * _parse_%s ( void )\n{\n", etype->type_name, etype->TYPE_NAME );
@@ -525,6 +539,8 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
       }
       WF ( file, "  struct %s *p = calloc (1, sizeof(*p));\n\n", etype->type_name);
       WF ( file, "  if ( ! p ) return NULL;\n\n");
+
+      WF ( file, "  debug(\"entering\\n\");\n");
 
       /** Structure initialisation **/
       for ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
@@ -548,7 +564,7 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
       WF ( file, "\n" );
 
       /* yylex loop parsing */
-      WF ( file, "  while (ret == 0 && (token = yylex())) {\n" );
+      WF ( file, "  for (token = yylex(); ret == 0 && token != 0 && token != E_END_DEF_STRUCT; token = yylex()) {\n" );
       WF ( file, "    switch ( token ) {\n" );
       for  ( field = etype->u_desc.struct_desc.list_of_fields; field != NULL; field = field->next ) {
         WF ( file, "      case E_%s:\n", field->FIELD_NAME );
@@ -578,11 +594,15 @@ static void _do_lex_parse_funcs ( FILE *file, struct type_desc *list_of_types )
         }
         WF ( file, "      break;\n" );
       }
+      WF ( file, "      case E_END_DEF_STRUCT:\n");
+      WF ( file, "        debug (\"Leaving struct %s at line %%d\\n\", line_counter );\n", etype->type_name );
+      WF ( file, "        break;\n");
       WF ( file, "      default:\n");
       WF ( file, "        ret = 1;\n" );
-      WF ( file, "        error ( \"ERROR: unexpected token at line %%d: %%s\\n\", line_counter, yytext );\n");
+      WF ( file, "        error ( \"ERROR: unexpected token (%%d) at line %%d: %%s\\n\", token, line_counter, yytext );\n");
       WF ( file, "    }\n" );
       WF ( file, "  }\n\n" );
+      WF ( file, "  debug(\"end of parsing\\n\");\n" );
       WF ( file, "  /** TODO: integrity check if any value is missing */\n" );
       WF ( file, "  if ( ret != 0 ) {\n" );
       _print_erase_elem ( file, etype, "p", "cur", "sav" );
@@ -644,6 +664,7 @@ static void _do_lex_makefile ( FILE * file, const char * example, const char *he
 {
   char *o = strdup ( lexoutf );
   char *q = strdup ( example );
+  char *outbin = "example";
   char *p;
   if ( o == NULL ) return;
 
@@ -655,11 +676,12 @@ static void _do_lex_makefile ( FILE * file, const char * example, const char *he
   }
 
   WF ( file, "LEX = flex\nYACC = bison\n\n" );
-  WF ( file, "all: example\n\nexample: %s %s\n", o, q );
+  WF ( file, "all: %s\n\n%s: %s %s\n", outbin, outbin, o, q );
   WF ( file, "\t$(CC) -o $@ $^\n");
   WF ( file, ".l.c:\n\t$(LEX) $^\n\n" );
   WF ( file, "%s: %s\n\n", lexouth, lexoutf );
-  WF ( file, "clean:\n\t-rm -f %s %s %s\n", o, lexoutf, lexouth );
+  WF ( file, "clean:\n\t-rm -f %s %s %s %s %s\n\n", outbin, q, o, lexoutf, lexouth );
+  WF ( file, "mrproper: clean\n\t-rm -f %s %s\n", example, "Makefile" );
   /*WF ( file, "libconfigparser.so: %s %s\n", o, headf );
   WF ( file, "\t$(CC) $^ -o $@\n" );*/
 
