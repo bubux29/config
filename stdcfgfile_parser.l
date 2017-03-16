@@ -1,7 +1,7 @@
 %{
 #include <stdio.h>
 
-#include "tupperware_types.h"
+#include "std_types.h"
 
 int yywrap (void)
 {
@@ -65,7 +65,7 @@ union shared_val options = { .str = NULL, };
 /* Definition des etats */
 %x NEW_LEVEL COUNT_LEVEL NEW_ENUM ENUM_VARNAME ENUM_VAL NEW_TYPE FLUSH_LINE UNSIGNED HANDLE_ERROR TEST_TYPE_LIST NEW_LEVEL_NAME
 
-%option outfile="tupperwar.c" header-file="tupperwar.h"
+%option outfile="stdcfgfile_parser.c" header-file="stdcfgfile_parser.h"
 
 %%
 \n		{ line_counter++; }

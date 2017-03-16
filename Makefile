@@ -6,12 +6,12 @@ EXTRACT = ex
 ##FILEP=../src/cmds/cmds.h
 
 FLEXDEBUG = '-d'
-GENELEXC = tupperwar.c
-GENELEXH = tupperwar.h
+GENELEXC = stdcfgfile_parser.c
+GENELEXH = stdcfgfile_parser.h
 GENES = $(GENELEXC) $(GENELEXH)
 all: puto test
 
-puto: tupperwar.o make_file.o tupperware_types.h
+puto: stdcfgfile_parser.o make_file.o std_types.h
 	$(CC) $^ -o $@
 
 .l.c:
@@ -22,4 +22,4 @@ test: puto
 	./$< < conf.gg
 
 clean:
-	rm -f puto
+	rm -f puto *.o
