@@ -1,3 +1,8 @@
+/**
+ * Author: Sylvain Burette ( sylvain <dot> burette <at> gmail <dot> com )
+ *
+ * This file shall not be used without permission granted by the author.
+ */
 %{
 #include <stdio.h>
 
