@@ -1,0 +1,27 @@
+[mode1] config0
+	int moncul
+	char mesfesses
+	enum condiment myval = "saucisse|patate|tomate"
+	[level2] duopat
+		int difficulte
+		char champion
+		enum manger tyval = "frites|glace"
+		enum pasfaim ttyval = "ga|qsdlfkjh|true"
+		[levelQ] patoq
+			int cul
+			char bite
+	[levelZ] zizi[]
+		char champignon
+		char patate
+		[gpt]
+			int cul
+			char bite
+[mode2] config1
+	int rentre_chez_toi
+	unsigned int coucou
+	[gpt] gepete
+	[ffgg] fuck_gg
+		int duoficulte[]
+		[levelDDD] jute
+			int chatte
+			enum chier ttupu = "PQ|gfaim"
