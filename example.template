@@ -13,7 +13,7 @@
 	[levelZ] zizi[]
 		char champignon
 		char patate
-		[gpt]
+		[gpt] pluche
 			int cul
 			char bite
 [mode2] config1

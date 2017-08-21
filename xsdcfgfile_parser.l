@@ -1,12 +1,5 @@
-/**
- * Author: Sylvain Burette ( sylvain <dot> burette <at> gmail <dot> com )
- *
- * This file shall not be used without permission granted by the author.
- */
 %{
 #include <stdio.h>
-#include <getopt.h>
-#include <stdlib.h>
 
 #include "std_types.h"
 
@@ -70,16 +63,20 @@ union shared_val options = { .str = NULL, };
 %}
 
 /* Definition des etats */
-%x NEW_LEVEL COUNT_LEVEL NEW_ENUM ENUM_VARNAME ENUM_VAL NEW_TYPE FLUSH_LINE UNSIGNED HANDLE_ERROR TEST_TYPE_LIST NEW_LEVEL_NAME
+%x NEW_LEVEL COUNT_LEVEL NEW_ENUM ENUM_VARNAME ENUM_VAL NEW_TYPE FLUSH_LINE UNSIGNED HANDLE_ERROR TEST_TYPE_LIST NEW_LEVEL_NAME COMMENT
 
-%option outfile="stdcfgfile_parser.c" header-file="stdcfgfile_parser.h"
+%option outfile="xsdcfgfile_parser.c" header-file="xsdcfgfile_parser.h"
 
 %%
+<!--		{ BEGIN COMMENT; }
+<COMMENT>-->	{ BEGIN 0; }
+<COMMENT>[^\n]	;
 \n		{ line_counter++; }
 -		{
 		printf ("beurk cant bear '-' char, at line %d\n", line_counter);
 		return -1;
 		}
+<xs:element[[:space:]]*	{ current_level = 0; BEGIN NEW_ELEMENT; }
 "["		{ current_level = 0; BEGIN NEW_LEVEL; return E_GOTO_LEVEL; }
 ^\t		{ current_level = 1; BEGIN COUNT_LEVEL; yyless(1); }
  /*[\t]*"enum "[ ]*	{ BEGIN NEW_ENUM; } */
@@ -168,11 +165,6 @@ double_t[ ]+	{
 		BEGIN NEW_TYPE;
 		return E_TYPE_NAME;
 		}
-string_t[ ]+	{
-		options.type_name = STRING_t;
-		BEGIN NEW_TYPE;
-		return E_TYPE_NAME;
-		}
 <NEW_TYPE>[^ \t\n\[\]]+	{
 			options.str = strdup (yytext);
 			BEGIN TEST_TYPE_LIST;
@@ -249,7 +241,7 @@ static char *_to_variable_name ( char *name )
   char *varname = NULL, *c;
 
   if ( name != NULL ) {
-    varname = strndup ( name, 256 );
+    varname = strndup ( name, 32 );
   }
 
   if ( varname != NULL ) {
@@ -267,12 +259,11 @@ static char *_to_uppername ( char *name )
 
   if ( name == NULL ) return NAME;
 
-  NAME = strndup (name, 256);
+  NAME = strndup (name, 32);
   if ( NAME == NULL ) return NAME;
   /* TODO: take care of wide chars... if any in UTF-8 mode */
 #define TOUPPER(c) ((c) >= 'a' && (c) <= 'z') ? ((c) - 'a' + 'A') :  \
                    ((c) >= 'A' && (c) <= 'Z' ) ? (c) : \
-                   ((c) == '*' ) ? 'T' : \
                    ((c) >= '0' && (c) <= '9') ? (c): '_'
   for ( c = NAME; *c != '\0'; c++ ) {
     *c = TOUPPER(*c);
@@ -302,7 +293,7 @@ struct vals *new_vals ( char *name )
   p->enum_name = to_enum_val (name);
   return p;
 }
-static struct type_desc * new_type ( char *name, enum type_indicator type, enum known_type type_desc )
+static struct type_desc * new_type ( char *name, enum type_indicator type )
 {
   struct type_desc *p = (struct type_desc *) calloc (1, sizeof (*p));
 
@@ -312,21 +303,18 @@ static struct type_desc * new_type ( char *name, enum type_indicator type, enum 
     p->variable_name = _to_variable_name (name);
     p->has_been_defined = 0;
     p->type_ind = type;
-    if ( type == E_BASIC_TYPE ) {
-      p->u_desc.type_desc = type_desc;
-    }
   }
 
   return p;
 }
 
-static struct type_desc * find_or_add_type ( struct type_desc **list_head, enum type_indicator type, char *name, enum known_type type_desc )
+static struct type_desc * find_or_add_type ( struct type_desc **list_head, enum type_indicator type, char *name )
 {
   struct type_desc *prun, *last;
 
   if ( list_head == NULL ) return NULL;
   if ( *list_head == NULL ) {
-    prun = new_type (name, type, type_desc);
+    prun = new_type (name, type);
     *list_head = prun;
     return prun;
   }
@@ -341,16 +329,16 @@ static struct type_desc * find_or_add_type ( struct type_desc **list_head, enum 
     }
   }
 
-  prun = new_type(name, type, type_desc);
+  prun = new_type(name, type);
   last->next = prun;
   return prun;
 }
 
-static struct field * new_field ( struct type_desc ** list_of_type, char *typename, enum type_indicator type, enum known_type type_desc )
+static struct field * new_field ( struct type_desc ** list_of_type, char *typename, enum type_indicator type )
 {
   struct field *p = (struct field *) calloc (1, sizeof(*p));
 
-  p->type = find_or_add_type ( list_of_type, type, typename, type_desc );
+  p->type = find_or_add_type ( list_of_type, type, typename );
   if ( p->type == NULL ) {
     free (p);
     p = NULL;
@@ -385,60 +373,21 @@ int main (int argc, char **argv)
   struct field *head, *p, *at_level;
   struct vals *vals_runner = NULL, *pvalues = NULL;
   struct type_desc *list_of_types = NULL, *etype = NULL;
-  char headerfilename[256];
-  char lexfilename[256];
-  char makefilename[256];
-  char lexoutfilename[256];
-  char lexoutheaderfilename[256];
-  char mainexfilename[256];
-  char dirout[256] = { '/', 't', 'm', 'p', '\0', };
-  char basename[256] = { 'r', 'o', 'o', 't', '\0', };
-  char *BASENAME;
+  char *headerfilename = "/tmp/aware_types.h";
+  char *lexfilename = "/tmp/toto.l";
+  char *makefilename = "/tmp/Makefile";
+  char *lexoutfilename = "toto.c";
+  char *lexoutheaderfilename = "toto.h";
+  char *mainexfilename = "/tmp/main_ex.c";
   char *c;
-  char cc[256] = { '\0', };
+  const char *cc = "AWARE_TYPES_H";
   char *config_functionname = "parse_config";
   FILE *header, *lex_file, *makefile, *mainexfile;
-  int opt;
 
   yyin = stdin;
 
-  while ( (opt = getopt(argc, argv, "d:o:")) != -1) {
-    switch (opt) {
-      case 'd': /* Output directory */
-        strncpy ( &dirout[0], optarg, sizeof(dirout) );
-        break;
-      case 'o':
-        strncpy ( &basename[0], optarg, sizeof(basename) );
-        break;
-      default:
-        fprintf ( stderr, "Usage: %s [-d outputdir] [-c outputfilename]\n",
-                  argv[0] );
-        exit(EXIT_FAILURE);
-    }
-  }
-
-/*
-  if ( basename[0] == '\0' ) {
-    strcpy (&basename
-  }
-*/
-
-  snprintf (&headerfilename[0], sizeof(headerfilename), "%s/%s_types.h",
-                                                        dirout, basename );
-  snprintf (&lexfilename[0], sizeof(lexfilename), "%s/%s_parser.l",
-                                                        dirout, basename );
-  snprintf (&makefilename[0], sizeof(makefilename), "%s/Makefile.ex", dirout );
-  snprintf (&lexoutfilename[0], sizeof(lexoutfilename), "%s/%s_parser.c",
-                                                        dirout, basename );
-  snprintf (&lexoutheaderfilename[0], sizeof(lexoutheaderfilename),
-                                     "%s/%s_parser.h", dirout, basename );
-  snprintf (&mainexfilename[0], sizeof(mainexfilename),
-                                     "%s/%s_example.c", dirout, basename );
-  BASENAME = _to_uppername(basename);
-  snprintf (&cc[0], sizeof(cc), "__%s_TYPES_H__", BASENAME);
-
   /* Defining root of tree */
-  head = new_field (&list_of_types, basename, E_STRUCT, 0);
+  head = new_field (&list_of_types, "root", E_STRUCT);
   if (head == NULL)
     return EXIT_FAILURE;
   head->father = head;
@@ -463,7 +412,7 @@ int main (int argc, char **argv)
       break;
       case E_NEW_LEVEL:
         printf ("New level : %s (%d)\n", options.str, current_level);
-        p = new_field(&list_of_types, options.str, E_STRUCT, 0);
+        p = new_field(&list_of_types, options.str, E_STRUCT);
         if ( p == NULL ) {
           printf ("Error at line %d\n", line_counter);
           ret = 1;
@@ -475,7 +424,7 @@ int main (int argc, char **argv)
       break;
       case E_NEW_ENUM:
         printf ("new enum: %s : ", options.str);
-        p = new_field(&list_of_types, options.str, E_ENUM, 0);
+        p = new_field(&list_of_types, options.str, E_ENUM);
         if ( p == NULL ) {
           printf ("Error at line %d\n", line_counter);
           ret = 1;
@@ -504,7 +453,7 @@ int main (int argc, char **argv)
         }
       break;
       case E_TYPE_NAME:
-        p = new_field(&list_of_types, type_names[options.type_name], E_BASIC_TYPE, options.type_name);
+        p = new_field(&list_of_types, type_names[options.type_name], E_BASIC_TYPE);
         if ( p == NULL ) {
           printf ("Error at line %d\n", line_counter);
           ret = 1;
@@ -532,7 +481,7 @@ int main (int argc, char **argv)
   make_header ( header, cc, list_of_types, config_functionname );
   make_lex_file ( lex_file, list_of_types, headerfilename, config_functionname, lexoutfilename, lexoutheaderfilename );
   make_lex_makefile ( makefile, ((c = strrchr ( mainexfilename, '/' ) ) == NULL )? mainexfilename : c + 1, lexfilename, headerfilename, lexoutfilename, lexoutheaderfilename );
-  make_lex_main_example ( mainexfile, config_functionname, lexoutheaderfilename, headerfilename, list_of_types );
+  make_lex_main_example ( mainexfile, config_functionname, lexoutheaderfilename, list_of_types );
   fclose ( header ); fclose ( lex_file ); fclose ( mainexfile ); fclose ( makefile );
   return 0;
 }

@@ -190,7 +190,7 @@ static int _append_or_not ( struct field *field, struct field ***plist_of_fields
   }
 
   *size_of_list += 1;
-  pnew = (struct field **) realloc ( *plist_of_fields, *size_of_list * sizeof(struct field*));
+  pnew = (struct field **) realloc ( *plist_of_fields, (*size_of_list) * sizeof(struct field*));
   if ( pnew == NULL ) {
     printf ("Out of mem\n");
     free ( plist_of_fields );
@@ -247,6 +247,8 @@ static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, uns
   /* List any header */
   WF ( file, "%%{\n"
 "#include <stdio.h>\n"
+"#include <limits.h>\n"
+"#include <math.h>\n"
 "#include \"%s\"\n"
 "\n"
 "int yywrap(void)\n{\n  return 1;\n}"
@@ -266,8 +268,8 @@ static void _do_lex_header ( FILE *file, struct field **list_of_uniq_fields, uns
       WF ( file, "  enum %s e_%s;\n", etype->type_name, etype->type_name );
     } else if ( etype->type_ind == E_BASIC_TYPE ) {
       WF ( file, "  %s e_%s;\n", etype->type_name, etype->TYPE_NAME );
+      name_to_zeroise = etype->TYPE_NAME;
     }
-    name_to_zeroise = etype->type_name;
   }
 
   WF ( file, "};\n" );
@@ -301,6 +303,7 @@ static void _do_lex_state_defs ( FILE * file, struct type_desc *list_of_types, c
 {
   struct type_desc *etype;
   struct field *field;
+  int has_string = 0;
 
   if ( list_of_types == NULL || list_of_types->next == NULL ) return;
 
@@ -309,6 +312,9 @@ static void _do_lex_state_defs ( FILE * file, struct type_desc *list_of_types, c
   for ( etype = list_of_types->next; etype != NULL; etype = etype->next ) {
     if ( etype->type_ind != E_STRUCT )
       WF ( file, "%s ", etype->TYPE_NAME );
+
+    if ( etype->type_ind == E_BASIC_TYPE && etype->u_desc.type_desc == STRING_t )
+      has_string = 1;
 #if 0
     if ( etype->type_ind == E_STRUCT ) {
       WF ( file, "%s ", etype->TYPE_NAME );
@@ -321,6 +327,10 @@ static void _do_lex_state_defs ( FILE * file, struct type_desc *list_of_types, c
       }
     }
 #endif
+  }
+
+  if ( has_string == 1 ) {
+    WF ( file, "CLOSE_STRING " );
   }
 
   WF ( file, "\n\n" );
@@ -368,6 +378,99 @@ static void _do_lex_begin_rules ( FILE *file )
 
 }
 
+static void _print_basic_type_parser ( FILE *file, struct type_desc *ptype )
+{
+  char *funcname = NULL;
+  char *max_val, *min_val;
+  int has_3rd_arg = 1, has_min = 1, has_max = 1;
+
+  if ( ptype == NULL || ptype->type_ind != E_BASIC_TYPE ) return;
+
+  switch ( ptype->u_desc.type_desc ) {
+    case UINT8_t:
+      funcname = "strtoul";
+      max_val = "UCHAR_MAX";
+      has_min = 0;
+      break;
+    case INT8_t:
+      funcname = "strtol";
+      max_val = "SCHAR_MAX";
+      min_val = "SCHAR_MIN";
+      break;
+    case UINT16_t:
+      funcname = "strtoul";
+      max_val = "UHRT_MAX";
+      has_min = 0;
+      break;
+    case INT16_t:
+      funcname = "strtol";
+      max_val = "SHRT_MAX";
+      min_val = "SHRT_MIN";
+      break;
+    case UINT32_t:
+      funcname = "strtoul";
+      max_val = "UINT_MAX";
+      has_min = 0;
+      break;
+    case INT32_t:
+      funcname = "strtol";
+      max_val = "INT_MAX";
+      min_val = "INT_MIN";
+      break;
+    case UINT64_t:
+      /* Here there is a bit of uncertainty between 32-bit and 64-bit arch... */
+      funcname = "strtoul";
+      max_val = "ULLONG_MAX";
+      has_min = 0;
+      break;
+    case INT64_t:
+      /* Here there is a bit of uncertainty between 32-bit and 64-bit arch... */
+      funcname = "strtol";
+      max_val = "LLONG_MAX";
+      min_val = "LLONG_MIN";
+      break;
+    case INT_t:
+      funcname = "strtol";
+      max_val = "INT_MAX";
+      min_val = "INT_MIN";
+      break;
+    case UINT_t:
+      funcname = "strtoul";
+      max_val = "UINT_MAX";
+      has_min = 0;
+      break;
+    case FLOAT_t:
+      has_3rd_arg = 0;
+      funcname = "strtof";
+      has_min = 0;
+      has_max = 0;
+      break;
+    case DOUBLE_t:
+      has_3rd_arg = 0;
+      funcname = "strtod";
+      has_min = 0;
+      has_max = 0;
+      break;
+    default:
+      return;
+  }
+
+  WF ( file, "<%s>[^[:space:]\\n]+\t\t{ errno = 0; %s.e_%s = %s(yytext, NULL %s);",
+       ptype->TYPE_NAME, SHARED_VAL, ptype->TYPE_NAME, funcname,
+       (has_3rd_arg == 1) ? ", 0" : ""); /* Selon les fonctions, on peut avoir ou non un 3ème argument... c'est compliqué à gérer, mais c'est ainsi! */
+  WF ( file, "if (errno != ERANGE) { BEGIN CLOSE_LINE;");
+  if ( has_max == 1 && has_min == 1 ) {
+    WF ( file, "if ( %s.e_%s > %s || %s.e_%s < %s ) { BEGIN SYNTAX_FILE_ERROR; error(\"Value too wide\"); } else return %s; ", SHARED_VAL, ptype->TYPE_NAME, max_val, SHARED_VAL, ptype->TYPE_NAME, min_val, FIELD_GLOB);
+  } else if ( has_max == 1 ) {
+    WF ( file, "if ( %s.e_%s > %s ) { BEGIN SYNTAX_FILE_ERROR; error(\"Value too wide\"); } else return %s; ", SHARED_VAL, ptype->TYPE_NAME, max_val, FIELD_GLOB);
+  } else {
+    WF ( file, "return %s; ", FIELD_GLOB );
+  }
+
+  WF ( file, "} else { BEGIN SYNTAX_FILE_ERROR; error(\"Value too wide\"); }}\n");
+      /*WF ( file, "<%s>[^[:space:]\\n]+\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return %s; }\n", etype->TYPE_NAME, SHARED_VAL, FIELD_GLOB);*/
+}
+
 static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types, struct field **list_of_uniq_fields, unsigned int nb_fields )
 {
   struct type_desc *etype;
@@ -395,7 +498,7 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
       /* If field is of type "string_t", we have to remove the '"' sign
        * from the start and the end of the string
        */
-      WF ( file, "%s{S}*={S}*\"\t\t{ %s.str = strdup(yytext); return E_%s; }\n", field->field_name, SHARED_VAL, field->FIELD_NAME );
+      WF ( file, "%s{S}*={S}*\\\"\t\t{ BEGIN %s; debug(\"I got %s (%%d)\\n\", line_counter); %s = E_%s; }\n", field->field_name, field->type->TYPE_NAME, field->field_name, FIELD_GLOB, field->FIELD_NAME );
     } else {
       /* If field is of type "simple", meaning int, float..., well we
        * shall parse directly what happens next to the '=' sign
@@ -407,9 +510,11 @@ static void _do_lex_machine_state ( FILE *file, struct type_desc * list_of_types
   for ( etype = list_of_types; etype != NULL; etype = etype->next ) {
     WF ( file, "\t/* Parsing %s %s vals */\n", (etype->type_ind == E_STRUCT) ? "struct" : (etype->type_ind == E_ENUM ) ? "enum" : "basic type", etype->type_name );
     if ( etype->type_ind == E_BASIC_TYPE && etype->u_desc.type_desc != STRING_t ) {
-      WF ( file, "<%s>[^[:space:]\\n]+\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return %s; }\n", etype->TYPE_NAME, SHARED_VAL, FIELD_GLOB);
+      _print_basic_type_parser( file, etype );
     } else if ( etype->type_ind == E_BASIC_TYPE ) { /* it remains string_t */
-      WF ( file, "<%s>.*[^\\]\"\t\t{ BEGIN CLOSE_LINE; %s.str = strdup (yytext); return E_%s; }\n", etype->TYPE_NAME, SHARED_VAL, etype->TYPE_NAME );
+      WF ( file, "<%s>.*[^\\\"\\n]\t\t{ BEGIN CLOSE_STRING; %s.str = strdup (yytext); return %s; }\n", etype->TYPE_NAME, SHARED_VAL, FIELD_GLOB);
+      WF ( file, "<CLOSE_STRING>\\\"	{ BEGIN CLOSE_LINE; }\n");
+      WF ( file, "<CLOSE_STRING>.	{ yyless(1); BEGIN CLOSE_LINE; }\n");
     } else if ( etype->type_ind == E_ENUM ) {
       for ( val = etype->u_desc.enum_desc.values; val != NULL; val = val->next ) {
         WF ( file, "<%s>\"%s\"\t\t{ BEGIN CLOSE_LINE; %s.e_%s = %s; return %s; }\n", etype->TYPE_NAME, val->name, SHARED_VAL, etype->type_name, val->enum_name, FIELD_GLOB );
@@ -696,9 +801,10 @@ static void _do_lex_makefile ( FILE * file, const char * example, const char *he
 /***************************/
 /** Main example function **/
 /***************************/
-static void _do_main_example ( FILE *file, const char *funcname, const char *header, struct type_desc *list_of_types )
+static void _do_main_example ( FILE *file, const char *funcname, const char *header, const char *headertypefilename, struct type_desc *list_of_types )
 {
-  WF ( file, "#include \"%s\"\n\n", header );
+  WF ( file, "#include \"%s\"\n", header );
+  WF ( file, "#include \"%s\"\n\n", headertypefilename );
   WF ( file, "int main ( int argc, char **argv )\n"
 "{\n"
 "  int ret;\n"
@@ -754,7 +860,7 @@ int make_header ( FILE *header, char *cc, struct type_desc *list_of_types, char 
 
 int make_lex_file ( FILE *file, struct type_desc *types, char *header_filename, char *config_functionname, char *lexoutfilename, char *lexoutheaderfilename )
 {
-  struct field **list_of_fields;
+  struct field **list_of_fields = NULL;
   unsigned int nb_fields = 0;
   int ret;
 
@@ -775,11 +881,11 @@ int make_lex_file ( FILE *file, struct type_desc *types, char *header_filename, 
   return ret;
 }
 
-int make_lex_main_example ( FILE *mainfile, const char *funcname, const char *headfilename, struct type_desc *list_of_types )
+int make_lex_main_example ( FILE *mainfile, const char *funcname, const char *headfilename, const char *headertypefilename, struct type_desc *list_of_types )
 {
   if ( mainfile == NULL || headfilename == NULL || funcname == NULL || list_of_types == NULL ) return -1;
 
-  _do_main_example ( mainfile, funcname, headfilename, list_of_types );
+  _do_main_example ( mainfile, funcname, headfilename, headertypefilename, list_of_types );
 
   return 0;
 }
