@@ -315,18 +315,6 @@ static void _do_lex_state_defs ( FILE * file, struct type_desc *list_of_types, c
 
     if ( etype->type_ind == E_BASIC_TYPE && etype->u_desc.type_desc == STRING_t )
       has_string = 1;
-#if 0
-    if ( etype->type_ind == E_STRUCT ) {
-      WF ( file, "%s ", etype->TYPE_NAME );
-      for ( field = etype->u_desc.struct_desc.list_of_fields;
-            field != NULL;
-            field = field->next ) {
-        if ( field->type->type_ind == E_BASIC_TYPE ) {
-          WF ( file, "%s_%s ", etype->TYPE_NAME, field->FIELD_NAME );
-        }
-      }
-    }
-#endif
   }
 
   if ( has_string == 1 ) {
